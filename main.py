@@ -1,100 +1,83 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-import time
 import os
 import threading
-from pathlib import Path
+import time
+from urllib.request import Request, urlopen
+from lxml import etree
+from selenium import webdriver
+from collections import deque
 
-def is_completed(dir):
-    allFiles: list[str] = os.listdir(dir)
-    for file_name in allFiles:
-        if file_name.endswith(".crdownload"):
-            return False  # Download is still in progress
-    return True  # No incomplete downloads, meaning the file download is complete
+desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "Anime")
+os.makedirs(desktop_path, exist_ok=True)  # Create the folder if it doesn't exist
 
-def download():
-    i = 1
-    while downloadLinks:
-        driver.execute_script(f"window.open('{downloadLinks[0]}')")
-        print(f"Downloading episode {i}")
-        time.sleep(5)
-        while not is_completed(dir):
-            time.sleep(1)
-        downloadLinks.pop(0)
-        i += 1
+def main():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    }
+
+    link = input("Link: ")
+    # link = "https://anime3rb.com/titles/ao-ashi"
+    # start_ep = int(input("Start episode: "))
+    start_ep = 1
+    # end_ep = int(input("End episode: "))
+    end_ep = -1
+
+    anime_page = urlopen(Request(link, headers=headers))
+    htmlparser = etree.HTMLParser()
+    tree = etree.parse(anime_page, htmlparser)
+    episodes = int(tree.xpath("/html/body/div[2]/div[4]/main/div[2]/section[1]/div/div/div/div[2]/div[3]/div[2]/div[2]/p[2]")[0].text)
+
+    if end_ep != -1: episodes = end_ep
+
+    anime_name = link[link.rindex("/") + 1:]
+    state = True
+
+    service = webdriver.ChromeService("chromedriver.exe")
+
+    # Configure Chrome options
+    options = webdriver.ChromeOptions()
+    prefs = {
+        "download.default_directory": desktop_path,  # Set download directory
+        "download.prompt_for_download": False,       # Disable download confirmation
+        "directory_upgrade": True,                  # Automatically overwrite existing files
+        "safebrowsing.enabled": True                # Enable safe browsing
+    }
+    options.add_experimental_option("prefs", prefs)
+    options.add_argument('--disable-throttling')
+    options.add_argument('--no-proxy-server')
+    # options.add_argument('--headless')
+    options.add_argument('--disable-dev-shm-usage')
+
+    driver = webdriver.Chrome(
+        # service = service,
+        options = options
+    )
+    driver.get("chrome://downloads/")
+    global queue
+    queue = deque()
+
+    for i in range(start_ep, episodes + 1):
+        ep_link = f"https://anime3rb.com/episode/{anime_name}/{i}"
+        print(ep_link)
+        ep_page = urlopen(Request(ep_link, headers=headers))
+        tree = etree.parse(ep_page, htmlparser)
+        download_link = tree.xpath("/html/body/div[2]/div[4]/main/div[2]/section[1]/div/div/div[1]/div[2]/div[4]/div[2]/div[1]/div/div[3]/a")[0].get("href")
+        queue.append(download_link)
+        if state:
+            download_thread = threading.Thread(target=download, args=[driver])
+            download_thread.start()
+            state = False
         
-def get_download_links():
-    global downloadLinks, downloadthread
-    downloadthread = None
-    downloadLinks = []
-    for link in links:
-        driver.get(link)
-        time.sleep(1)
-        downloadBtns = driver.find_elements(
-            By.XPATH,
-            "/html/body/div[2]/div[4]/main/div/section[1]/div/div/div[1]/div[2]/div[4]/div[2]/div[1]/div/div",
-        )
-        for button in downloadBtns:
-            label = button.find_element(By.TAG_NAME, "label")
-            if "480" in label.text:
-                downloadLink = button.find_element(By.TAG_NAME, "a")
-                otherLink = downloadLink.get_attribute("href")
-                downloadLinks.append(otherLink)
-                break
-        else:
-            downloadLink = download[0].find_element(By.TAG_NAME, 'a')
-            otherLink = downloadLink.get_attribute("href")
-            downloadLinks.append(otherLink)
-        if downloadthread is None:
-            downloadthread = threading.Thread(target=download)
-            downloadthread.start()
-    while downloadthread.is_alive():
-        time.sleep(1)
-    
+    download_thread.join()
+    driver.quit()
 
-downloadpath = str(Path.home()) + "\\Desktop\\Anime"
-# print(downloadpath)
-# print(downloadpath)
+def download(driver: webdriver.Chrome):
+    while queue:
+        driver.execute_script(f"window.open(\"{queue.popleft()}\")")
+        while not is_done() or len(driver.window_handles) > 1:
+            time.sleep(1)
 
-# dir = input("Directory: ")
+def is_done():
+    return not any(file.endswith(".crdownload") for file in os.listdir(desktop_path))
 
-prefs = {
-    "download.default_directory": downloadpath,
-    "profile.default_content_settings.popups": 0,
-    "directory_upgrade": True,
-    "safebrowsing.enabled": True,
-}
-
-options = webdriver.ChromeOptions()
-options.add_experimental_option("prefs", prefs)
-options.add_argument("headless")
-
-driver = webdriver.Chrome(options = options)
-driver.minimize_window()
-
-
-link = input("Link: ")
-lowerLimit = int(input("Starting from episode: "))
-upperLimit = int(input("To episode: "))
-
-
-driver.get(link)
-
-time.sleep(3)
-
-all_links = driver.find_elements(
-    By.XPATH,
-    "/html/body/div[2]/div[4]/main/div/section[1]/div/div/div/div[3]/div[2]/div/div/a",
-)
-
-links = []
-if upperLimit == -1: upperLimit = len(all_links)
-for link in all_links[lowerLimit - 1 : upperLimit]:
-    url = link.get_attribute("href")
-    links.append(url)
-
-get_download_links()
-
-
-driver.quit()
-exit()
+if __name__ == "__main__":
+    main()
